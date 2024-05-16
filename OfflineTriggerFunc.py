@@ -163,12 +163,12 @@ def FindClockDriftShiftCorrection(ToAs, LHCOrbitTime, OrbitBins, TimeBins,Maximu
         peaks, _ = find_peaks(y,height=30)
         CurrentShiftVector = np.zeros(TimeBins.shape[0]-1)
         PreviousRow = Values[0,:]
-        PreviousRow = low_pass_filter(PreviousRow,SamplingFreq,FilterFreq)
-        #PreviousRow = (PreviousRow-PreviousRow.mean())/PreviousRow.std()
+        #PreviousRow = low_pass_filter(PreviousRow,SamplingFreq,FilterFreq)
+        PreviousRow = (PreviousRow-PreviousRow.mean())/PreviousRow.std()
         for i in range(1,TimeBins.shape[0]-1):
             CurrentRow = Values[i,:]
-            CurrentRow = low_pass_filter(CurrentRow,SamplingFreq,FilterFreq)
-            #CurrentRow = (CurrentRow-CurrentRow.mean())/CurrentRow.std()
+            #CurrentRow = low_pass_filter(CurrentRow,SamplingFreq,FilterFreq)
+            CurrentRow = (CurrentRow-CurrentRow.mean())/CurrentRow.std()
             #CurrentShiftVector[i] = FindBestAllignmentShift(PreviousRow, CurrentRow,MaximumShift)
             ##,MaximumShift)
             if(method=="Correlation"):

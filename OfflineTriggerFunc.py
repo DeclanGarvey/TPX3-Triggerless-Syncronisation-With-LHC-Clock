@@ -5,7 +5,11 @@ from scipy.signal import correlate
 import matplotlib.pyplot as plt 
 from scipy.signal import savgol_filter
 from scipy.signal import butter, lfilter
+from tqdm import tqdm
 
+"""
+When To
+"""
 def RemoveNoisyToAValues(InputDf):
     df = InputDf.copy()
     df["ToABin"] = np.digitize(df["MinToA"]%25, bins=np.linspace(-0.1,25,1000+1))*25/1000
@@ -19,6 +23,17 @@ def RemoveNoisyToAValues(InputDf):
             df = df[df["ToABin"]!=i]
     return df 
 
+"""
+Takes as input:
+    ToAs: This are the recorded minium ToA values of a the set of clusters in the experiment
+    LHCOrbitTime: This is time it takes for a given bumch to undergo one full orbit of LHC
+    OrbitBins: 
+    TimeBins:
+Outputs the Bunch structure evolution matrix where each row represents a all ToAs that full into the particular TimeBins
+The row values is the Section(ToA) Modulus LHCOrbitTime which gives the bunch structure of the at that time
+
+Called the evolution matrix as the bunch structure varies in due to variation in TPX3 clock bin size variations
+"""
 def GetBunchStructureEvolutionMatrix(ToAs, LHCOrbitTime, OrbitBins, TimeBins):
     TemporalMatrix = np.zeros(( TimeBins.shape[0]-1, OrbitBins.shape[0]-1))
     for i in range(TimeBins.shape[0]-1):
@@ -27,234 +42,222 @@ def GetBunchStructureEvolutionMatrix(ToAs, LHCOrbitTime, OrbitBins, TimeBins):
 
         TemporalMatrix[i,:] = y
     return TemporalMatrix
-    
-def FindBestAllignmentShift(function1, function2):
-    # Calculate the cross-correlation of the two functions
 
+"""
+Takes in to vectors function1 and function2 
+
+Calculate the optimal shift of function2 such that the cross-correlation between the two functions is optimised 
+
+The shift is given in number of indexs to shift and can be applied using np.roll function
+"""  
+def FindBestAllignmentShift(function1, function2, MaximumShift=None):
+    # Calculate the cross-correlation of the two functions
     correlation = correlate(function1, function2)
-
-    # Find the shift that maximizes the correlation
-    best_shift = np.argmax(correlation) - (len(function1) - 1)
+    
+    if(MaximumShift==None):
+        # Find the shift that maximizes the correlation
+        best_shift = np.argmax(correlation) - (len(function1) - 1)
+    else:
+        # Find the range of indices within the specified MaximumShift
+        start_index = len(function1) - 1 - MaximumShift
+        end_index = len(function1) - 1 + MaximumShift + 1
+        # Find the shift that maximizes the correlation within the specified range
+        best_shift = np.argmax(correlation[start_index:end_index]) - MaximumShift
     
     return best_shift
-"""def FindBestAllignmentShift(function1, function2, max_shift):
-    # Calculate the cross-correlation of the two functions
 
-    correlation = correlate(function1, function2, mode='full')
+"""
+Takes in:
+     ToAs: This are the recorded minium ToA values of a the set of clusters in the experiment
+     LHCOribtTimeVector: This is the initial prediction of the measured relative to the TPX3 clock for each TimeBin
+     Delta: This gives the range around the initial guess in which the LHC orbit time is searched per TotalIteraction, the search region:LHCOrbitTime+\- LHCOrbitTime*Delta
+     OrbitBins: This the binin g
+     TimeBins: The time bins in which the ToA values are split into and should have length len(LHCOribtTimeVector)+1
+                    for each bin TimeBins[i]:TimeBins[i+1], LHCOribtTimeVector[i] is applied
+     MaximumShift: This is the maximum 
+     TotalIterations: This gives the number of times you the algorithm starts at the first row of the vector and iterates through the matrix
+     SubIterations: This gives the number of times the algorithm 
+     method:
 
-    # Find the range of indices within the specified max_shift
-    start_index = len(function1) - 1 - max_shift
-    end_index = len(function1) - 1 + max_shift + 1
-
-    # Find the shift that maximizes the correlation within the specified range
-    best_shift = np.argmax(correlation[start_index:end_index]) - max_shift
+The algorithm implements a hybrid version of the overshoot-undershoot algorithm to find the optimal value of LHCOrbitTimeVector
+    1. Calculates the LH
+"""
+def FindClockDriftShiftCorrection(ToAs, LHCOrbitTimeVector, Delta, OrbitBins, TimeBins,MaximumShift=3, TotalIterations=2,SubIterations=30,method="forward", MaxShift=-1):
+    #Set 
+    if(MaxShift==-1):
+        MaxShift=OrbitBins.shape[0]//1000
     
-    return best_shift"""
-def find_best_alignment_fourier(signal_ref, signal_to_align, frequency_range):
-    """
-    Finds the best alignment shift between two signals within a specified frequency range using the Fourier transform.
+    for IterationNumber in range(TotalIterations):
+        ToASection = ToAs[(ToAs>TimeBins[0]) & (ToAs<TimeBins[1])].copy()
+        t = TimeBins[1]
+        t = t%LHCOrbitTimeVector[0]
+        PreviousRow,x = np.histogram((ToASection)%(LHCOrbitTimeVector[0]),bins=OrbitBins)
+        #PreviousRow = (PreviousRow-PreviousRow.mean())/PreviousRow.std()
+        #PreviousRow = (PreviousRow-PreviousRow.mean())
+        PreviousRow = PreviousRow/np.sum(PreviousRow)
+        AverageNumberOfIterationNeeded=0
+        AverageCrossCorelation=0
+        print(f"%d/%d"%(IterationNumber+1,TotalIterations), end=":  ")
+        for i in tqdm(range(1,TimeBins.shape[0]-1)):
+            if(method=="forward"):
+                LHCOrbitTimeVectorMax = LHCOrbitTimeVector[i-1] + Delta*LHCOrbitTimeVector[i-1]
+                LHCOrbitTimeVectorMin = LHCOrbitTimeVector[i-1] - Delta*LHCOrbitTimeVector[i-1]
+                LHCOrbitTimeVector[i] = LHCOrbitTimeVector[i-1]
+            elif(method=="central"):
+                LHCOrbitTimeVectorMax = LHCOrbitTimeVector[i] + Delta*LHCOrbitTimeVector[i]
+                LHCOrbitTimeVectorMin = LHCOrbitTimeVector[i] - Delta*LHCOrbitTimeVector[i]
+            else:
+                raise Exception(f"Unknown method given \"{method}\" expected \"forward\" or \"central\"")
+            ToASection = ToAs[(ToAs>TimeBins[i]) & (ToAs<TimeBins[i+1])].copy()
+            ToASection = ToASection - TimeBins[i]
+            ToASection = ToASection + t
+            #print()
+            for SubIterationNumber in range(SubIterations):
+                AverageNumberOfIterationNeeded+=1
+                CurrentRow,x = np.histogram((ToASection)%(LHCOrbitTimeVector[i]),bins=OrbitBins)
+                #CurrentRow = (CurrentRow-CurrentRow.mean())/CurrentRow.std()
+                #CurrentRow = (CurrentRow-CurrentRow.mean())
+                CurrentRow = CurrentRow/np.sum(CurrentRow)
+                #print(SubIterationNumber,LHCOrbitTimeVector[i], end=" ")
+                shift = FindBestAllignmentShift(PreviousRow, CurrentRow,MaxShift)
+                if(shift<0):
+                    LHCOrbitTimeVectorMin = LHCOrbitTimeVector[i]
+                    LHCOrbitTimeVector[i] = (LHCOrbitTimeVectorMax+LHCOrbitTimeVectorMin)/2
+                elif(shift>0):
+                    LHCOrbitTimeVectorMax = LHCOrbitTimeVector[i]
+                    LHCOrbitTimeVector[i] = (LHCOrbitTimeVectorMax+LHCOrbitTimeVectorMin)/2
+                else:
+                    LHCOrbitTimeVectorMax = LHCOrbitTimeVector[i] 
+                    LHCOrbitTimeVectorMin = LHCOrbitTimeVector[i] 
+                    break
+            CurrentRow,x = np.histogram((ToASection)%(LHCOrbitTimeVector[i]),bins=OrbitBins)
+            #CurrentRow = (CurrentRow-CurrentRow.mean())/CurrentRow.std()
+            CurrentRow = CurrentRow/np.sum(CurrentRow)
+            #print(AverageCrossCorelation, np.dot(PreviousRow,CurrentRow))
+            AverageCrossCorelation += np.dot(PreviousRow,CurrentRow)
+            t = t + (TimeBins[i+1] - TimeBins[i])
+            t = t%LHCOrbitTimeVector[i]
+            PreviousRow = CurrentRow
+        
+        AverageNumberOfIterationNeeded = AverageNumberOfIterationNeeded/(TimeBins.shape[0]-2)
+        AverageCrossCorelation = AverageCrossCorelation/(TimeBins.shape[0]-2)
+        print(f"Average Number Of iterations needed: %.5g, Average Zero-Lag Cross-Correlation: %.4e"%(AverageNumberOfIterationNeeded,AverageCrossCorelation))
+        if(method=="forward"):
+            LHCOrbitTimeVectorMax = LHCOrbitTimeVector[1] + Delta*LHCOrbitTimeVector[1]
+            LHCOrbitTimeVectorMin = LHCOrbitTimeVector[1] - Delta*LHCOrbitTimeVector[1]
+            LHCOrbitTimeVector[0] = LHCOrbitTimeVector[1]
+        elif(method=="central"):
+            LHCOrbitTimeVectorMax = LHCOrbitTimeVector[0] + Delta*LHCOrbitTimeVector[0]
+            LHCOrbitTimeVectorMin = LHCOrbitTimeVector[0] - Delta*LHCOrbitTimeVector[0]
+            
+        else:
+                raise Exception(f"Unknown method given \"{method}\" expected \"forward\" or \"central\"")
+                
+        t1 = ToAs[(ToAs>TimeBins[0]) & (ToAs<TimeBins[1])].copy()
+        t2 = ToAs[(ToAs>TimeBins[1]) & (ToAs<TimeBins[2])].copy()
+        for SubIterationNumber in range(SubIterations):
+            tt2 = t2 - TimeBins[1] + (TimeBins[1]%LHCOrbitTimeVector[0])
+            PreviousRow,x = np.histogram((tt2)%(LHCOrbitTimeVector[1]),bins=OrbitBins)
+            #PreviousRow = (PreviousRow-PreviousRow.mean())/PreviousRow.std()
+            #PreviousRow = (PreviousRow-PreviousRow.mean())
+            PreviousRow = PreviousRow/np.sum(PreviousRow)
+            CurrentRow,x = np.histogram((t1)%(LHCOrbitTimeVector[0]),bins=OrbitBins)
+            #CurrentRow = (CurrentRow-CurrentRow.mean())/CurrentRow.std()
+            CurrentRow = CurrentRow/np.sum(CurrentRow)
+            shift = FindBestAllignmentShift(PreviousRow, CurrentRow,MaxShift)
+            if(shift<0):
+                LHCOrbitTimeVectorMin = LHCOrbitTimeVector[0]
+                LHCOrbitTimeVector[0] = (LHCOrbitTimeVectorMax+LHCOrbitTimeVectorMin)/2
+            elif(shift>0):
+                LHCOrbitTimeVectorMax = LHCOrbitTimeVector[0]
+                LHCOrbitTimeVector[0] = (LHCOrbitTimeVectorMax+LHCOrbitTimeVectorMin)/2
+            else:
+                LHCOrbitTimeVectorMax = LHCOrbitTimeVector[0] 
+                LHCOrbitTimeVectorMin = LHCOrbitTimeVector[0] 
+                break
+    return LHCOrbitTimeVector
 
-    Args:
-        signal_ref (numpy.ndarray): Reference signal.
-        signal_to_align (numpy.ndarray): Signal to align with the reference.
-        frequency_range (tuple): Frequency range of interest (start_freq, end_freq).
+"""
 
-    Returns:
-        int: Best alignment shift (in number of samples).
-    """
-    # Perform the Fourier transform
-    ref_transform = np.fft.fft(signal_ref)
-    align_transform = np.fft.fft(signal_to_align)
+"""
+def GetBunchStructureEvolutionMatrix(ToAs, LHCOrbitTimeVector, OrbitBins, TimeBins):
+    TemporalMatrix = np.zeros(( TimeBins.shape[0]-1, OrbitBins.shape[0]-1))
+    tt= np.int64(0)
+    for i in range(TimeBins.shape[0]-1):
+        ToASection = ToAs[(ToAs>TimeBins[i]) & (ToAs<TimeBins[i+1])].copy()
+        ToASection -= TimeBins[i]
+        ToASection += tt
+        y,x = np.histogram((ToASection)%(LHCOrbitTimeVector[i]),bins=OrbitBins)
+        TemporalMatrix[i,:] = y
+        if(i!=TimeBins.shape[0]-2):
+            tt += (TimeBins[i+1] - TimeBins[i])
+            tt = tt%LHCOrbitTimeVector[i]
+    return TemporalMatrix
+def GetBunchStructureEvolutionMatrixWithVariableOrbitTime(ToAs, LHCOrbitTimeVector, OrbitBinNumber, TimeBins):
+    TemporalMatrix = np.zeros(( TimeBins.shape[0]-1, OrbitBinNumber-1))
+    tt= np.int64(0)
+    for i in range(TimeBins.shape[0]-1):
+        ToASection = ToAs[(ToAs>TimeBins[i]) & (ToAs<TimeBins[i+1])].copy()
+        ToASection -= TimeBins[i]
+        ToASection += tt
+        y,x = np.histogram((ToASection)%(LHCOrbitTimeVector[i]),bins=np.linspace(0,LHCOrbitTimeVector[i],OrbitBinNumber))
+        TemporalMatrix[i,:] = y
+        if(i!=TimeBins.shape[0]-2):
+            tt += (TimeBins[i+1] - TimeBins[i])
+            tt = tt%LHCOrbitTimeVector[i]
+    return TemporalMatrix   
 
-    # Frequency range indices
-    freq_range_indices = np.arange(len(signal_ref)) * (1 / len(signal_ref))
+"""
 
-    # Find the indices within the frequency range
-    freq_indices = np.where((freq_range_indices >= frequency_range[0]) & (freq_range_indices <= frequency_range[1]))[0]
-
-    # Apply a mask to the Fourier transforms
-    ref_transform_masked = np.zeros_like(ref_transform)
-    align_transform_masked = np.zeros_like(align_transform)
-    ref_transform_masked[freq_indices] = ref_transform[freq_indices]
-    align_transform_masked[freq_indices] = align_transform[freq_indices]
-
-    # Calculate the cross-correlation using the inverse Fourier transform
-    cross_corr = np.fft.ifft(ref_transform_masked * np.conj(align_transform_masked))
-
-    # Find the index of the maximum correlation
-    best_shift_index = np.argmax(np.abs(cross_corr))
-
-    # Calculate the best shift in number of samples
-    best_shift = best_shift_index - len(signal_ref) + 1
-
-    return best_shift
-    
-def monitor_alignment_stability(shifts, threshold=0.01, num_iterations=5):
-    """
-    Monitor the stability of alignment based on the variation of alignment parameters (shifts) across iterations.
-
-    Args:
-        shifts (numpy.ndarray): Array of alignment shifts across iterations.
-        threshold (float): Threshold for considering the alignment stable. Defaults to 0.01.
-        num_iterations (int): Number of iterations to consider for stability assessment. Defaults to 5.
-
-    Returns:
-        bool: True if alignment is considered stable, False otherwise.
-    """
-    if len(shifts) < num_iterations:
-        return False
-
-    recent_shifts = shifts[-num_iterations:]
-    max_shift_variation = np.max(np.abs(np.diff(recent_shifts)))
-
-    return max_shift_variation < threshold
-"""def low_pass_filter(signal, sampling_freq,cutoff_freq,  order=5):#
-    # Discrete Fourier Transform
-    frequency_domain = np.fft.fft(signal)
-    frequencies = np.fft.fftfreq(len(signal), 1 / sampling_freq)
-
-    # Filter design
-    nyquist_freq = 0.5 * sampling_freq
-    normalized_cutoff = cutoff_freq / nyquist_freq
-    filter_window = np.zeros_like(signal)
-    filter_window[np.abs(frequencies) <= normalized_cutoff] = 1
-
-    # Apply filter to frequency domain
-    filtered_frequency_domain = frequency_domain * filter_window
-
-    # Inverse Fourier Transform
-    filtered_signal = np.fft.ifft(filtered_frequency_domain).real
-
-    return filtered_signal"""
-
-def low_pass_filter(signal, sampling_freq,cutoff_freq,  order=5):
-    # Discrete Fourier Transform
-    b,a = butter(order, cutoff_freq, fs=sampling_freq)
-    filtered_signal = lfilter(b,a,signal)
-
-    return filtered_signal
-    
-def FindClockDriftShiftCorrection(ToAs, LHCOrbitTime, OrbitBins, TimeBins,MaximumShift=3, MaxIterations=30,method="Correlation"):
+"""
+def FindClockDriftShiftCorrectionByInterpolation(ToAs, LHCOrbitTime, OrbitBins, TimeBins,MaximumShift=3, MaxIterations=30,method="Correlation"):
     CorrectedToAs = ToAs.copy()
     
     ShiftVectors = []
-    Interpolations  = []
     MeanCorrelations = np.zeros(MaxIterations)
     CurrentShiftSum = 1
-    IterationNumber = 0
-    FilterFreq = 0.12#*(OrbitBins[1]-OrbitBins[0])
-    SamplingFreq=1
     PreviousShiftVector = np.zeros(TimeBins.shape[0]-2)
-    TotalShiftVector = np.zeros(TimeBins.shape[0]-1)
     
-    BunchFrequency = (1.0/15.96779293)*(OrbitBins[1]-OrbitBins[0])
-    while(((CurrentShiftSum)>0) & (IterationNumber<MaxIterations)):
-        
+    for IterationNumber in range(MaxIterations):
         Values = GetBunchStructureEvolutionMatrix(CorrectedToAs, LHCOrbitTime, OrbitBins, TimeBins)
-        #Values[0,:] = low_pass_filter(Values[0,:],SamplingFreq,FilterFreq)#
         Values[0,:] = (Values[0,:]-Values[0,:].mean())/Values[0,:].std()
         Correlations = np.zeros(TimeBins.shape[0]-1)
         for i in range(1, TimeBins.shape[0]-1):
-            #Values[i,:] = low_pass_filter(Values[i,:],SamplingFreq,FilterFreq)#
             Values[i,:] = (Values[i,:]-Values[i,:].mean())/Values[i,:].std()
             Correlations[i] = np.abs(np.corrcoef(Values[i-1,:] ,Values[i,:] )[0, 1])
         MeanCorrelations[IterationNumber] = np.abs(Correlations).mean()
         y = Values.sum(axis=0)
         peaks, _ = find_peaks(y,height=30)
-        CurrentShiftVector = np.zeros(TimeBins.shape[0]-1)
+        CurrentShiftVector = np.zeros(TimeBins.shape[0]-1).astype('int64')
         PreviousRow = Values[0,:]
-        #PreviousRow = low_pass_filter(PreviousRow,SamplingFreq,FilterFreq)
         PreviousRow = (PreviousRow-PreviousRow.mean())/PreviousRow.std()
         for i in range(1,TimeBins.shape[0]-1):
             CurrentRow = Values[i,:]
-            #CurrentRow = low_pass_filter(CurrentRow,SamplingFreq,FilterFreq)
             CurrentRow = (CurrentRow-CurrentRow.mean())/CurrentRow.std()
-            #CurrentShiftVector[i] = FindBestAllignmentShift(PreviousRow, CurrentRow,MaximumShift)
-            ##,MaximumShift)
-            if(method=="Correlation"):
-                CurrentShiftVector[i] = FindBestAllignmentShift(PreviousRow, CurrentRow)
-            elif(method=="Fourier"):
-                CurrentShiftVector[i] = find_best_alignment_fourier(PreviousRow, CurrentRow, (0.0,1.0))
-            else:
-                print("Warning: Unknown method specified, Correlation method is being used.")
-                CurrentShiftVector[i] = FindBestAllignmentShift(PreviousRow, CurrentRow, )
-            #CurrentShiftVector[i] = (CurrentShiftVector[i]+(IterationNumber)*PreviousShiftVector[i])//(IterationNumber+1)
-            #if(CurrentShiftVector[i] == -PreviousShiftVector[i]):
-            #    CurrentShiftVector[i]=CurrentShiftVector[i]//2
+            CurrentShiftVector[i] = FindBestAllignmentShift(PreviousRow, CurrentRow)
             PreviousRow = CurrentRow
         PreviousShiftVector = CurrentShiftVector.copy()
         
         CurrentShiftSum = abs(CurrentShiftVector).sum()     
-        #TotalShiftVector += CurrentShiftVector   
-        #TotalShiftVector[TotalShiftVector>MaximumShift] = MaximumShift
-        #TotalShiftVector[TotalShiftVector<-MaximumShift] = -MaximumShift
-        #CurrentShiftSum = abs(TotalShiftVector).sum()
         
         
         CurrentShiftVector = np.cumsum(CurrentShiftVector)
-        #CummedSummedTotalShiftVector = np.cumsum(TotalShiftVector)
         
         inter = np.interp(CorrectedToAs, TimeBins[:-1], CurrentShiftVector)*(OrbitBins[1]-OrbitBins[0]) 
-        #inter = np.interp(ToAs, TimeBins[:-1], CummedSummedTotalShiftVector)*(OrbitBins[1]-OrbitBins[0])
         
         CorrectedToAs = CorrectedToAs + inter 
-        #CorrectedToAs = ToAs + inter
-        
-        
         
         ShiftVectors.append(CurrentShiftVector)
-        #ShiftVectors.append(CummedSummedTotalShiftVector)
         
         print(IterationNumber, CurrentShiftSum,MeanCorrelations[IterationNumber], peaks.shape[0])
         
-        IterationNumber+=1
     return ShiftVectors
+"""
 
-"""def ApplyToAShiftCorrection(ToA, ShiftVectors, TimeBins, OrbitBinSize):
+""" 
+def ApplyToAShiftCorrection(ToA, ShiftVectors, TimeBins, OrbitBinSize):
     CorrectedToAs = ToA.copy()
     for shift in ShiftVectors:
         inter = np.interp(CorrectedToAs, TimeBins[:-1], shift)*OrbitBinSize
         CorrectedToAs += inter
-    return CorrectedToAs"""
-def ApplyToAShiftCorrection(ToA, ShiftVectors, TimeBins, OrbitBinSize):
-    CorrectedToAs = ToA.copy()
-    for shift in ShiftVectors:
-        #inter = shift[np.digitize(CorrectedToAs, TimeBins[:-1])-1]*OrbitBinSize
-        inter = np.interp(CorrectedToAs, TimeBins[:-1], shift)*OrbitBinSize
-        
-        CorrectedToAs += inter #+ Addition
-        
     return CorrectedToAs
-def FindShiftBetweenToALists(ListOfToAFiles,AllignVector, LHCOrbitTime, OrbitBins, MaxIterations=5):
-    BunchStructures = []
-    for ToAs in ListOfToAFiles:
-        y,x = np.histogram((ToAs)%(LHCOrbitTime),bins=OrbitBins)
-        y = y*(y<y.max()*0.5)
-        BunchStructures.append(y)
-    ShiftVectors = []
-    CurrentShiftSum = 1
-    IterationNumber = 0
-    while((IterationNumber<MaxIterations)):
-        
-        CurrentShiftVector = np.zeros(len(ListOfToAFiles)).astype(int)
-    
-        for i in range(len(ListOfToAFiles)):
-            CurrentRow = BunchStructures[i]
-            if(CurrentRow.sum()>0):
-                #RandomShift = np.random.randint(int(OrbitBins.shape[0]))
-                #CurrentRow = np.roll(BunchStructures[i],RandomShift)
-                CurrentRow = CurrentRow/CurrentRow.sum()
-                CurrentShiftVector[i] = FindBestAllignmentShift(AllignVector, CurrentRow)# - RandomShift
-                BunchStructures[i] = np.roll(BunchStructures[i],CurrentShiftVector[i])
-                
-        CurrentShiftSum = np.abs(CurrentShiftVector).sum()
-        
-        ShiftVectors.append(CurrentShiftVector)
-        
-        print(CurrentShiftSum, end=" ")
-        IterationNumber+=1
-    ToAShifts = np.zeros(len(ListOfToAFiles))
-    for i in ShiftVectors:
-        ToAShifts += i
-    ToAShifts *= (OrbitBins[1] - OrbitBins[0])
-    return ToAShifts
